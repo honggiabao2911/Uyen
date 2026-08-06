@@ -230,6 +230,7 @@
         import * as THREE from 'three';
         import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
         import { CSS2DRenderer, CSS2DObject } from 'three/addons/renderers/CSS2DRenderer.js';
+        import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
 
         // --- SPAWN THÊM TẬN 60 ICON TRANG TRÍ NỀN VÀNG CHO CỰC KỲ SỐNG ĐỘNG ---
         const bgContainer = document.getElementById('bg-decor-container');
@@ -244,6 +245,14 @@
             el.style.animationDelay = (Math.random() * 5) + 's';
             bgContainer.appendChild(el);
         }
+
+        // --- CHỐNG ẢNH VỠ Ở SỔ ẢNH: ảnh gốc lỗi thì âm thầm thay ảnh dự phòng, không lộ icon ảnh vỡ ---
+        document.querySelectorAll('#step2-book img').forEach((img, idx) => {
+            img.addEventListener('error', function onImgError() {
+                img.removeEventListener('error', onImgError);
+                img.src = `https://picsum.photos/400/400?random=${300 + idx}`;
+            });
+        });
 
         // --- TỪ ĐIỂN ---
         const dict = {
@@ -605,18 +614,66 @@
 
             const cubeSize = isMobile ? 4.5 : 5.8; 
             const textureLoader = new THREE.TextureLoader();
+            textureLoader.crossOrigin = 'anonymous';
             const fallbacks = ['101','102','103','104','105','106','107','108','109','110','111'].map(n => `https://picsum.photos/400/400?random=${n}`);
 
+            // --- FIX LỖI Ô BỊ TRẮNG/MẤT HÌNH ---
+            // Trước đây nếu ảnh gốc (anhX.jpg) lỗi VÀ ảnh dự phòng online cũng lỗi (mạng chậm, bị chặn...)
+            // thì khối sẽ bị bỏ trắng trơn. Giờ thêm 1 lớp chốt chặn cuối: tự vẽ texture họa tiết vàng
+            // đồng bộ theme trang, không phụ thuộc mạng nên không bao giờ bị lỗi/mất hình nữa.
+            function createPlaceholderTexture() {
+                const size = 512;
+                const c = document.createElement('canvas');
+                c.width = size; c.height = size;
+                const pctx = c.getContext('2d');
+
+                const grad = pctx.createLinearGradient(0, 0, size, size);
+                grad.addColorStop(0, '#ffe082');
+                grad.addColorStop(0.5, '#ffb300');
+                grad.addColorStop(1, '#ff6f00');
+                pctx.fillStyle = grad;
+                pctx.fillRect(0, 0, size, size);
+
+                pctx.strokeStyle = 'rgba(255,255,255,0.65)';
+                pctx.lineWidth = 14;
+                pctx.strokeRect(26, 26, size - 52, size - 52);
+
+                const icons = ['🐤', '💛', '✨', '🎂', '🦆'];
+                pctx.font = `${size * 0.32}px "Segoe UI Emoji", "Apple Color Emoji", sans-serif`;
+                pctx.textAlign = 'center'; pctx.textBaseline = 'middle';
+                pctx.fillText(icons[Math.floor(Math.random() * icons.length)], size / 2, size / 2 + 10);
+
+                const tex = new THREE.CanvasTexture(c);
+                tex.colorSpace = THREE.SRGBColorSpace;
+                return tex;
+            }
+
+            function applyCubeTexture(cube, tex) {
+                tex.colorSpace = THREE.SRGBColorSpace;
+                cube.material.map = tex;
+                cube.material.needsUpdate = true;
+            }
+
+            function loadCubeTexture(cube, primaryUrl, fallbackUrl) {
+                textureLoader.load(primaryUrl, tex => applyCubeTexture(cube, tex), undefined, () => {
+                    textureLoader.load(fallbackUrl, tex => applyCubeTexture(cube, tex), undefined, () => {
+                        applyCubeTexture(cube, createPlaceholderTexture());
+                    });
+                });
+            }
+
             for (let i = 12; i <= 22; i++) {
-                const geometry = new THREE.BoxGeometry(cubeSize, cubeSize, cubeSize);
-                const material = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.1, metalness: 0.4 });
+                // Bo góc nhẹ cho khối ảnh mềm mại hơn, đồng bộ với toàn bộ bo tròn của giao diện trang
+                const geometry = new RoundedBoxGeometry(cubeSize, cubeSize, cubeSize, 2, cubeSize * 0.12);
+                const material = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.35, metalness: 0.12, emissive: 0x3a2400, emissiveIntensity: 0.15 });
                 const cube = new THREE.Mesh(geometry, material);
 
-                textureLoader.load(`anh${i}.jpg`, 
-                    tex => { tex.colorSpace = THREE.SRGBColorSpace; cube.material.map = tex; cube.material.needsUpdate = true; }, 
-                    undefined, 
-                    err => { textureLoader.load(fallbacks[i-12], fallbackTex => { fallbackTex.colorSpace = THREE.SRGBColorSpace; cube.material.map = fallbackTex; cube.material.needsUpdate = true; }); }
-                );
+                loadCubeTexture(cube, `anh${i}.jpg`, fallbacks[i - 12]);
+
+                // Viền hào quang vàng ôm quanh khối, đồng bộ hiệu ứng phát sáng của các nhãn chữ nổi
+                const rimGeo = new RoundedBoxGeometry(cubeSize * 1.05, cubeSize * 1.05, cubeSize * 1.05, 2, cubeSize * 0.13);
+                const rim = new THREE.Mesh(rimGeo, new THREE.MeshBasicMaterial({ color: 0xffd54f, transparent: true, opacity: 0.16, side: THREE.BackSide }));
+                cube.add(rim);
 
                 const angle = ((i - 12) / 11) * Math.PI * 2;
                 const safeRadius = isMobile ? (16 + Math.random()*2) : (21 + Math.random()*3);
